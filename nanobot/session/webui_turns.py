@@ -38,6 +38,7 @@ from nanobot.bus.runtime_events import (
 from nanobot.llm_usage.context import llm_usage_source
 from nanobot.providers.base import LLMProvider, LLMUsage
 from nanobot.providers.fallback_provider import FallbackModelObserver, FallbackModelSelection
+from nanobot.providers.registry import KIMI_K3_MODELS
 from nanobot.runtime_context import public_history_message
 from nanobot.session.display_history import HISTORY_GENERATION_METADATA_KEY
 from nanobot.session.history_visibility import is_hidden_history_message
@@ -66,6 +67,7 @@ WEBUI_TITLE_METADATA_KEY = "title"
 WEBUI_TITLE_USER_EDITED_METADATA_KEY = "title_user_edited"
 TITLE_MAX_CHARS = 60
 TITLE_GENERATION_MAX_TOKENS = 96
+TITLE_FALLBACK_WORDS = 8
 
 # Latest active turn projection per ``chat_id`` (websocket only). It survives browser refresh
 # while the gateway process stays up and is implicitly dropped on restart.
@@ -218,7 +220,9 @@ async def maybe_generate_webui_title(
                 model=model,
                 max_tokens=TITLE_GENERATION_MAX_TOKENS,
                 temperature=0.2,
-                reasoning_effort=None,
+                # Kimi K3 always reasons; without an explicit effort its default
+                # thinking can exhaust the small title budget.
+                reasoning_effort="low" if model.lower().rsplit("/", 1)[-1] in KIMI_K3_MODELS else None,
                 retry_mode="standard",
             )
     except Exception:
@@ -228,6 +232,9 @@ async def maybe_generate_webui_title(
         return False
 
     title = clean_generated_title(response.content)
+    if not title and response.finish_reason == "length":
+        # Reasoning used the whole budget before any title text appeared.
+        title = clean_generated_title(" ".join(user_text.split()[:TITLE_FALLBACK_WORDS]))
     if not title or title.lower().startswith("error"):
         logger.debug(
             "WebUI title generation returned no usable title for {} (finish_reason={})",

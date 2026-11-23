@@ -397,6 +397,33 @@ async def test_generate_webui_title_only_for_marked_webui_sessions(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_generate_webui_title_limits_kimi_k3_reasoning_and_falls_back_on_length(
+    tmp_path: Path,
+) -> None:
+    loop = _make_full_loop(tmp_path)
+    loop.provider.chat_stream_with_retry = AsyncMock(
+        return_value=LLMResponse(content=None, finish_reason="length")
+    )
+    session = loop.sessions.get_or_create("websocket:k3-title")
+    session.metadata[WEBUI_SESSION_METADATA_KEY] = True
+    session.add_message("user", "Help me plan a   weekend trip to Lisbon with kids, please.")
+    session.add_message("assistant", "Sure, let's start with the flights.")
+    loop.sessions.save(session)
+
+    generated = await maybe_generate_webui_title(
+        sessions=loop.sessions,
+        session_key="websocket:k3-title",
+        provider=loop.provider,
+        model="moonshotai/kimi-k3.1-pro",
+    )
+
+    assert generated is True
+    session = await loop.sessions.state.get(session.key)
+    assert session.metadata[WEBUI_TITLE_METADATA_KEY] == "Help me plan a weekend trip to Lisbon"
+    assert loop.provider.chat_stream_with_retry.await_args.kwargs["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_generate_webui_title_skips_plain_websocket_sessions(tmp_path: Path) -> None:
     loop = _make_full_loop(tmp_path)
     loop.provider.chat_stream_with_retry = AsyncMock(
